@@ -221,11 +221,58 @@ class TestFetchTargetMessagesSpecificChat:
             wait_seconds=0,
         )
 
-        assert _message_ids(result) == [1, 3]
+        assert _message_ids(result) == [3, 1]
         client.get_entity.assert_awaited_once_with("mygroup")
         assert client.iter_messages.call_count == 2
         searched = {call.kwargs["search"] for call in client.iter_messages.call_args_list}
         assert searched == {"spam", "trash"}
+
+    @pytest.mark.asyncio
+    async def test_sorts_matches_by_date_interleaving_keywords(self):
+        chat_entity = MagicMock(id=100, title="mygroup")
+        spam_old = _make_message(
+            1,
+            datetime(2026, 1, 10, tzinfo=timezone.utc),
+            "early spam",
+            ME_ID,
+        )
+        trash_mid = _make_message(
+            2,
+            datetime(2026, 1, 12, tzinfo=timezone.utc),
+            "mid trash",
+            ME_ID,
+        )
+        spam_new = _make_message(
+            3,
+            datetime(2026, 1, 15, tzinfo=timezone.utc),
+            "late spam",
+            ME_ID,
+        )
+
+        client = MagicMock()
+        client.get_me = AsyncMock(return_value=MagicMock(id=ME_ID))
+        client.get_entity = AsyncMock(return_value=chat_entity)
+
+        def iter_messages_side_effect(_entity, **kwargs):
+            term = kwargs.get("search")
+            if term == "spam":
+                return _async_iter([spam_new, spam_old])
+            if term == "trash":
+                return _async_iter([trash_mid])
+            return _async_iter([])
+
+        client.iter_messages = MagicMock(side_effect=iter_messages_side_effect)
+
+        result = await fetch_target_messages(
+            client,
+            chats=["mygroup"],
+            keywords=["spam", "trash"],
+            everyone=False,
+            wait_seconds=0,
+        )
+
+        # Keyword discovery order would be [3, 1, 2]; chronological mixes terms.
+        assert _message_ids(result) == [1, 2, 3]
 
     @pytest.mark.asyncio
     async def test_matches_any_keyword_not_only_the_first(self):
@@ -263,7 +310,7 @@ class TestFetchTargetMessagesSpecificChat:
             everyone=False,
         )
 
-        assert _message_ids(result) == [1, 2]
+        assert _message_ids(result) == [2, 1]
         assert client.iter_messages.call_count == 1
         assert client.iter_messages.call_args.kwargs["search"] == "alexand"
 
@@ -326,9 +373,8 @@ class TestFetchTargetMessagesSpecificChat:
         assert _message_ids(result) == [42]
         assert any(
             record.levelno == logging.INFO
-            and "Match" in record.message
-            and "msg_id=42" in record.message
-            and "mygroup" in record.message
+            and "ID: 42" in record.message
+            and "hello spam" in record.message
             for record in caplog.records
         )
 
@@ -391,7 +437,7 @@ class TestFetchTargetMessagesSpecificChat:
             everyone=True,
         )
 
-        assert _message_ids(result) == [1, 2]
+        assert _message_ids(result) == [2, 1]
 
     @pytest.mark.asyncio
     async def test_filters_by_from_user(self):
@@ -642,6 +688,49 @@ class TestFetchTargetMessagesAllChats:
         assert client.iter_messages.call_args_list[1].args[0] is dialog_b.entity
         assert _message_ids(result) == [1, 2]
         assert search_global_calls == []
+
+    @pytest.mark.asyncio
+    async def test_keeps_chats_separate_when_sorting_by_date(self):
+        dialog_a = _make_dialog(101, "A")
+        dialog_b = _make_dialog(102, "B")
+        # Newer message in chat A; older message in chat B — chats must not mix.
+        msg_a_new = _make_message(
+            10,
+            datetime(2026, 2, 10, tzinfo=timezone.utc),
+            "spam in A",
+            ME_ID,
+        )
+        msg_b_old = _make_message(
+            20,
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "spam in B",
+            ME_ID,
+        )
+
+        client = MagicMock()
+        client.get_me = AsyncMock(return_value=MagicMock(id=ME_ID))
+        client.iter_dialogs = MagicMock(return_value=_async_iter([dialog_a, dialog_b]))
+
+        def iter_messages_side_effect(entity, **kwargs):
+            if entity.id == 101:
+                return _async_iter([msg_a_new])
+            if entity.id == 102:
+                return _async_iter([msg_b_old])
+            return _async_iter([])
+
+        client.iter_messages = MagicMock(side_effect=iter_messages_side_effect)
+
+        result = await fetch_target_messages(
+            client,
+            chats=["all"],
+            keywords=["spam"],
+            everyone=False,
+            wait_seconds=0,
+        )
+
+        assert _message_ids(result) == [10, 20]
+        assert result[0][0] is dialog_a.entity
+        assert result[1][0] is dialog_b.entity
 
     @pytest.mark.asyncio
     async def test_logs_search_progress_per_dialog(self, caplog):

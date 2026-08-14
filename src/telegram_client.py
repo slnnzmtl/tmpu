@@ -172,18 +172,24 @@ def _log_match(chat, message, me_id: int) -> None:
     """Log a single live match (same fields for search and history paths)."""
     text = (_message_body(message) or "")[:_MATCH_TEXT_PREVIEW_LEN]
     logger.info(
-        "Match chat=%s sender=%s msg_id=%s date=%s text=%s",
-        _chat_log_name(chat),
+        "[%s] %s (ID: %s): %s",
+        getattr(message, "date", None),
         sender_label(message, me_id),
         message.id,
-        getattr(message, "date", None),
         text,
     )
 
 
-def _record_match(results: list[tuple], chat, message, me_id: int) -> None:
+def _record_match(results: list[tuple], chat, message) -> None:
     results.append((chat, message))
-    _log_match(chat, message, me_id)
+
+
+def _finalize_chat_matches(results: list[tuple], me_id: int) -> list[tuple]:
+    """Sort one chat's matches oldest-first, then log in that order."""
+    results.sort(key=lambda item: item[1].date)
+    for chat, message in results:
+        _log_match(chat, message, me_id)
+    return results
 
 
 async def _collect_via_search(
@@ -229,14 +235,13 @@ async def _collect_via_search(
             if not _matches_keywords(message, keywords):
                 continue
 
-            _record_match(results, chat, message, me_id)
+            _record_match(results, chat, message)
 
     if progress is None:
         prefix = f"Searching {chat_name}"
     else:
         index, total = progress
         prefix = f"Searching {index}/{total}: {chat_name}"
-    terms_label = ",".join(terms)
     if search_hits > 0:
         logger.info(
             "%s hits=%d excluded(sender)=%d excluded(date)=%d matched=%d",
@@ -251,7 +256,7 @@ async def _collect_via_search(
             "%s no matches found",
             prefix,
         )
-        
+
     if (
         search_hits > 0
         and not results
@@ -263,7 +268,7 @@ async def _collect_via_search(
             "Telegram found messages but all were from other users. "
             "Re-run with --everyone or --from <user> to include them."
         )
-    return results
+    return _finalize_chat_matches(results, me_id)
 
 
 async def _collect_via_history(
@@ -299,7 +304,7 @@ async def _collect_via_history(
         if not _matches_keywords(message, keywords):
             continue
 
-        _record_match(results, chat, message, me_id)
+        _record_match(results, chat, message)
 
     if progress is None:
         prefix = f"Searching {chat_name}"
@@ -312,7 +317,7 @@ async def _collect_via_history(
         scanned,
         len(results),
     )
-    return results
+    return _finalize_chat_matches(results, me_id)
 
 
 async def _collect_messages_from_chat(
