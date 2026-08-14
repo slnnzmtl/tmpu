@@ -155,7 +155,7 @@ class TestSetupLogging:
         assert stderr_handlers, "expected a StreamHandler writing to stderr"
         assert stderr_handlers[0].level == logging.INFO
 
-    def test_stderr_handler_has_timestamped_formatter(self):
+    def test_stderr_handler_has_minimal_formatter(self):
         logger = setup_logging()
 
         stderr_handlers = [
@@ -169,10 +169,11 @@ class TestSetupLogging:
         formatter = stderr_handlers[0].formatter
         assert formatter is not None, "stderr handler must have a Formatter"
         fmt = formatter._fmt or ""
-        assert "asctime" in fmt, "formatter should include a timestamp (asctime)"
-        assert "levelname" in fmt, "formatter should include the log level (levelname)"
+        assert fmt == "%(message)s"
+        assert "asctime" not in fmt
+        assert "name" not in fmt
 
-    def test_child_logger_info_appears_on_stderr_with_level(self, capsys):
+    def test_child_logger_info_appears_on_stderr_without_prefix(self, capsys):
         setup_logging()
 
         client_logger = logging.getLogger("tmpu.telegram_client")
@@ -180,7 +181,8 @@ class TestSetupLogging:
 
         captured = capsys.readouterr()
         assert "client visibility probe" in captured.err
-        assert "INFO" in captured.err
+        assert "tmpu.telegram_client" not in captured.err
+        assert "INFO" not in captured.err.split("client visibility probe")[0]
 
 
 class TestWithFloodRetry:

@@ -135,7 +135,7 @@ def confirm_search(stdin_input: str | None) -> bool:
 
 
 LOGGER_NAME = "tmpu"
-_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+_LOG_FORMAT = "%(message)s"
 logger = logging.getLogger(LOGGER_NAME)
 
 DEFAULT_WAIT_SECONDS = 0.1
