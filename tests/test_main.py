@@ -93,6 +93,41 @@ def env_path(tmp_path: Path) -> Path:
     return tmp_path / ".env"
 
 
+class TestRunPurgeConnection:
+    @pytest.mark.asyncio
+    async def test_run_purge_exits_cleanly_on_connection_failure(
+        self,
+        dry_run_args: CliArgs,
+        sample_config: Config,
+        mock_client: AsyncMock,
+        env_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with (
+            patch("main.parse_args", return_value=dry_run_args),
+            patch("main.load_config", return_value=sample_config),
+            patch(
+                "main.create_client",
+                new_callable=AsyncMock,
+                side_effect=TimeoutError("Connection to Telegram failed 6 time(s)"),
+            ),
+            caplog.at_level("INFO"),
+        ):
+            await run_purge(argv=["--chats", "chat1"], env_path=env_path)
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("Connecting to Telegram..." in msg for msg in messages)
+        error_messages = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelname == "ERROR"
+        ]
+        assert error_messages, "expected connection ERROR log"
+        assert "Could not connect to Telegram" in error_messages[0]
+        assert "Check network/VPN/firewall" in error_messages[0]
+        mock_client.disconnect.assert_not_awaited()
+
+
 class TestRunPurgeDryRun:
     @pytest.mark.asyncio
     async def test_default_dry_run_fetches_and_logs_without_deleting(
@@ -459,6 +494,7 @@ class TestRunPurgeForce:
         sample_messages: list[tuple],
         mock_client: AsyncMock,
         env_path: Path,
+        caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
@@ -489,12 +525,16 @@ class TestRunPurgeForce:
                 new_callable=AsyncMock,
             ) as delete_mock,
             patch("main.confirm_deletion", return_value=False) as confirm_mock,
+            caplog.at_level("INFO"),
         ):
             await run_purge(argv=["--chats", "chat1", "--force"], env_path=env_path)
 
         confirm_mock.assert_called_once()
         delete_mock.assert_not_awaited()
         mock_client.disconnect.assert_awaited_once()
+        assert any(
+            "Deletion aborted" in record.getMessage() for record in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_force_with_confirmation_deletes_messages(
@@ -504,10 +544,12 @@ class TestRunPurgeForce:
         sample_messages: list[tuple],
         mock_client: AsyncMock,
         env_path: Path,
+        caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
         chat, _msg1, _msg2 = sample_messages[0][0], sample_messages[0][1], sample_messages[1][1]
+        chat.title = "TeamChat"
         resolved_chats = [chat]
 
         with (
@@ -535,6 +577,7 @@ class TestRunPurgeForce:
                 new_callable=AsyncMock,
             ) as delete_mock,
             patch("main.confirm_deletion", return_value=True) as confirm_mock,
+            caplog.at_level("INFO"),
         ):
             await run_purge(argv=["--chats", "chat1", "--force"], env_path=env_path)
 
@@ -546,6 +589,60 @@ class TestRunPurgeForce:
             wait_seconds=force_args.wait_seconds,
         )
         mock_client.disconnect.assert_awaited_once()
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("Deleting 2 message(s) across 1 chat(s)..." in msg for msg in messages)
+        assert any("Deleting 1/1: TeamChat (2 message(s))" in msg for msg in messages)
+        assert any("Successfully deleted 2 message(s)" in msg for msg in messages)
+
+    @pytest.mark.asyncio
+    async def test_force_with_zero_matches_skips_deletion_prompt(
+        self,
+        force_args: CliArgs,
+        sample_config: Config,
+        mock_client: AsyncMock,
+        env_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        resolved_chats = [MagicMock()]
+
+        with (
+            patch("main.parse_args", return_value=force_args),
+            patch("main.load_config", return_value=sample_config),
+            patch(
+                "main.create_client",
+                new_callable=AsyncMock,
+                return_value=mock_client,
+            ),
+            patch(
+                "main.resolve_search_chats",
+                new_callable=AsyncMock,
+                return_value=resolved_chats,
+                create=True,
+            ),
+            patch("main.confirm_search", return_value=True, create=True),
+            patch(
+                "main.fetch_target_messages",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "main.delete_messages_batch",
+                new_callable=AsyncMock,
+            ) as delete_mock,
+            patch("main.confirm_deletion", return_value=True) as confirm_mock,
+            caplog.at_level("INFO"),
+        ):
+            await run_purge(argv=["--chats", "chat1", "--force"], env_path=env_path)
+
+        confirm_mock.assert_not_called()
+        delete_mock.assert_not_awaited()
+        mock_client.disconnect.assert_awaited_once()
+        messages = [record.getMessage() for record in caplog.records]
+        assert not any("Deleting" in msg for msg in messages)
+        assert not any("Successfully deleted" in msg for msg in messages)
+        assert not any("Deletion aborted" in msg for msg in messages)
 
     @pytest.mark.asyncio
     async def test_force_on_non_tty_stdin_aborts_without_delete(

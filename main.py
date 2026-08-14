@@ -6,6 +6,7 @@ from pathlib import Path
 from src.cli import parse_args
 from src.config import load_config
 from src.telegram_client import (
+    _chat_log_name,
     create_client,
     delete_messages_batch,
     fetch_target_messages,
@@ -94,20 +95,49 @@ def _group_message_ids_by_chat(messages) -> list[tuple]:
 
 
 async def _purge_messages(client, messages, wait_seconds: float) -> None:
+    if not messages:
+        return
     if not _confirm_force_deletion():
+        logger.info("Deletion aborted")
         return
 
-    for chat, message_ids in _group_message_ids_by_chat(messages):
+    grouped = _group_message_ids_by_chat(messages)
+    total_messages = len(messages)
+    total_chats = len(grouped)
+    logger.info(
+        "Deleting %d message(s) across %d chat(s)...",
+        total_messages,
+        total_chats,
+    )
+
+    for index, (chat, message_ids) in enumerate(grouped, start=1):
+        logger.info(
+            "Deleting %d/%d: %s (%d message(s))",
+            index,
+            total_chats,
+            _chat_log_name(chat),
+            len(message_ids),
+        )
         await delete_messages_batch(
             client, chat, message_ids, wait_seconds=wait_seconds
         )
+
+    logger.info("Successfully deleted %d message(s)", total_messages)
 
 
 async def run_purge(argv: list[str] | None = None, env_path: Path | None = None) -> None:
     setup_logging()
     args = parse_args(argv)
     config = load_config(env_path or Path(".env"))
-    client = await create_client(config)
+    logger.info("Connecting to Telegram...")
+    try:
+        client = await create_client(config)
+    except OSError as exc:
+        logger.error(
+            "Could not connect to Telegram: %s. Check network/VPN/firewall.",
+            exc,
+        )
+        return
     try:
         me = await client.get_me()
         logger.info("Resolving candidate chats...")

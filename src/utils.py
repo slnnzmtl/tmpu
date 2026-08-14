@@ -170,6 +170,7 @@ def setup_logging() -> logging.Logger:
     logger.setLevel(logging.INFO)
     _ensure_stderr_handler(logger)
     logging.getLogger("telethon").setLevel(logging.WARNING)
+    logging.getLogger("telethon.network.mtprotosender").setLevel(logging.ERROR)
     return logger
 
 

@@ -141,6 +141,7 @@ python main.py --chats @mychannel --keywords test --force
 - **Search asks first** — before any Telegram search, you must confirm with `y` or `yes` (shows candidate chat count and expected search count).
 - **`--no-confirmation`** — skips only the search `y`/`yes` prompt; the `--force` `DELETE` prompt still applies.
 - **`--force` requires confirmation** — you must type `DELETE` exactly in an interactive terminal.
+- **Deletion progress** — `--force` logs per-chat deletion progress and a final success summary.
 - **Non-interactive runs abort** — piping or CI without a TTY will not search (unless `--no-confirmation`) or delete.
 - **Deletes for everyone** — removed messages disappear for all participants where Telegram allows it.
 
