@@ -18,7 +18,8 @@ def argv(monkeypatch):
 
 
 def test_minimal_args_default_to_dry_run(argv):
-    """Given only --chats, defaults dry_run=True, force=False, everyone=False."""
+    """Given only --chats, defaults dry_run=True, force=False, everyone=False,
+    channels=False, group_chats=False, no_confirmation=False, wait_seconds=0.1."""
     argv(["--chats", "foo"])
 
     args = parse_args()
@@ -27,6 +28,38 @@ def test_minimal_args_default_to_dry_run(argv):
     assert args.dry_run is True
     assert args.force is False
     assert args.everyone is False
+    assert args.from_user is None
+    assert args.channels is False
+    assert args.group_chats is False
+    assert args.no_confirmation is False
+    assert args.wait_seconds == 0.1
+
+
+def test_wait_seconds_parses_as_float(argv):
+    """Given --wait-seconds 0.5, wait_seconds is the float 0.5."""
+    argv(["--chats", "foo", "--wait-seconds", "0.5"])
+
+    args = parse_args()
+
+    assert args.wait_seconds == 0.5
+
+
+def test_wait_seconds_zero_parses_as_float(argv):
+    """Given --wait-seconds 0, wait_seconds is the float 0.0."""
+    argv(["--chats", "foo", "--wait-seconds", "0"])
+
+    args = parse_args()
+
+    assert args.wait_seconds == 0.0
+
+
+def test_no_confirmation_flag_sets_no_confirmation_true(argv):
+    """Given --no-confirmation, no_confirmation=True."""
+    argv(["--chats", "foo", "--no-confirmation"])
+
+    args = parse_args()
+
+    assert args.no_confirmation is True
 
 
 def test_force_sets_force_true_and_dry_run_false(argv):
@@ -76,3 +109,42 @@ def test_everyone_flag(argv):
     args = parse_args()
 
     assert args.everyone is True
+
+
+def test_from_user_flag(argv):
+    """Given --from, from_user is stored."""
+    argv(["--chats", "foo", "--from", "@alice"])
+
+    args = parse_args()
+
+    assert args.from_user == "@alice"
+
+
+def test_channels_flag_sets_channels_true(argv):
+    """Given --channels, channels=True and group_chats remains False."""
+    argv(["--chats", "foo", "--channels"])
+
+    args = parse_args()
+
+    assert args.channels is True
+    assert args.group_chats is False
+
+
+def test_group_chats_flag_sets_group_chats_true(argv):
+    """Given --group-chats, group_chats=True and channels remains False."""
+    argv(["--chats", "foo", "--group-chats"])
+
+    args = parse_args()
+
+    assert args.group_chats is True
+    assert args.channels is False
+
+
+def test_channels_and_group_chats_together(argv):
+    """Given --channels and --group-chats, both are True."""
+    argv(["--chats", "foo", "--channels", "--group-chats"])
+
+    args = parse_args()
+
+    assert args.channels is True
+    assert args.group_chats is True

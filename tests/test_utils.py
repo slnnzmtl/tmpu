@@ -11,7 +11,11 @@ from telethon.errors import FloodWaitError
 from src.utils import (
     chunk_list,
     confirm_deletion,
+    confirm_search,
+    expected_search_count,
     message_matches_keywords,
+    name_matches_query,
+    pause_for_telegram,
     setup_logging,
     with_flood_retry,
 )
@@ -60,6 +64,30 @@ class TestMessageMatchesKeywords:
     def test_matches_any_keyword_in_list(self):
         assert message_matches_keywords("nothing here", "but garbage", ["spam", "garbage"]) is True
 
+    def test_partial_stem_matches_inflected_word(self):
+        assert message_matches_keywords("meeting with alexandra", None, ["alexander"]) is True
+
+    def test_partial_stem_matches_different_case_ending(self):
+        assert message_matches_keywords("wrote alexandrum yesterday", None, ["alexander"]) is True
+
+    def test_single_short_keyword_still_matches_exactly(self):
+        assert message_matches_keywords("say hi", None, ["hi"]) is True
+
+    def test_broad_search_term_trims_suffix(self):
+        from src.utils import broad_search_term, search_terms
+
+        assert broad_search_term("alexander") == "alexand"
+        assert search_terms(["alexander", "alexandra", "alexandrum"]) == ["alexand"]
+
+
+class TestNameMatching:
+    def test_name_matches_query_partial_case_insensitive(self):
+        assert name_matches_query("team", ["TeamChat"]) is True
+        assert name_matches_query("ALICE", ["Alice Smith"]) is True
+
+    def test_name_matches_query_requires_non_empty_query(self):
+        assert name_matches_query("", ["TeamChat"]) is False
+
 
 class TestConfirmDeletion:
     def test_returns_true_for_exact_delete(self):
@@ -75,6 +103,38 @@ class TestConfirmDeletion:
 
     def test_returns_false_for_eof(self):
         assert confirm_deletion(None) is False
+
+
+class TestExpectedSearchCount:
+    def test_zero_chats_returns_zero(self):
+        assert expected_search_count(0, ["spam"]) == 0
+
+    def test_counts_chats_times_distinct_keywords(self):
+        assert expected_search_count(3, ["spam", "trash"]) == 6
+
+    def test_no_keywords_means_one_history_scan_per_chat(self):
+        assert expected_search_count(3, None) == 3
+        assert expected_search_count(3, []) == 3
+
+    def test_inflected_keywords_collapse_to_one_search_term_per_chat(self):
+        assert expected_search_count(3, ["alexander", "alexandra", "alexandrum"]) == 3
+
+
+class TestConfirmSearch:
+    def test_returns_true_for_yes_variants(self):
+        assert confirm_search("y") is True
+        assert confirm_search("yes") is True
+        assert confirm_search("Y") is True
+        assert confirm_search("YES") is True
+        assert confirm_search(" Yes ") is True
+
+    def test_returns_false_for_non_yes_input(self):
+        assert confirm_search("n") is False
+        assert confirm_search("no") is False
+        assert confirm_search("") is False
+        assert confirm_search("DELETE") is False
+        assert confirm_search(None) is False
+        assert confirm_search("yeah") is False
 
 
 class TestSetupLogging:
@@ -94,6 +154,33 @@ class TestSetupLogging:
 
         assert stderr_handlers, "expected a StreamHandler writing to stderr"
         assert stderr_handlers[0].level == logging.INFO
+
+    def test_stderr_handler_has_timestamped_formatter(self):
+        logger = setup_logging()
+
+        stderr_handlers = [
+            handler
+            for handler in logger.handlers
+            if isinstance(handler, logging.StreamHandler)
+            and handler.stream is sys.stderr
+        ]
+
+        assert stderr_handlers, "expected a StreamHandler writing to stderr"
+        formatter = stderr_handlers[0].formatter
+        assert formatter is not None, "stderr handler must have a Formatter"
+        fmt = formatter._fmt or ""
+        assert "asctime" in fmt, "formatter should include a timestamp (asctime)"
+        assert "levelname" in fmt, "formatter should include the log level (levelname)"
+
+    def test_child_logger_info_appears_on_stderr_with_level(self, capsys):
+        setup_logging()
+
+        client_logger = logging.getLogger("tmpu.telegram_client")
+        client_logger.info("client visibility probe")
+
+        captured = capsys.readouterr()
+        assert "client visibility probe" in captured.err
+        assert "INFO" in captured.err
 
 
 class TestWithFloodRetry:
@@ -131,6 +218,33 @@ class TestWithFloodRetry:
         assert result == "recovered"
         assert call_count == 2
         sleep_mock.assert_awaited_once_with(42)
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_with_wait_seconds_on_flood_wait_error(
+        self, monkeypatch, caplog
+    ):
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+
+        call_count = 0
+
+        @with_flood_retry
+        async def flaky():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise FloodWaitError(request=MagicMock(), capture=42)
+            return "recovered"
+
+        with caplog.at_level(logging.WARNING):
+            result = await flaky()
+
+        assert result == "recovered"
+        sleep_mock.assert_awaited_once_with(42)
+        assert any(
+            record.levelno == logging.WARNING and "42" in record.getMessage()
+            for record in caplog.records
+        ), "expected a WARNING log including the FloodWait wait seconds (42)"
 
     @pytest.mark.asyncio
     async def test_retries_up_to_five_times_then_reraises(self, monkeypatch):

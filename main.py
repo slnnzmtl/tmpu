@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 from src.cli import parse_args
@@ -10,10 +9,19 @@ from src.telegram_client import (
     create_client,
     delete_messages_batch,
     fetch_target_messages,
+    resolve_search_chats,
+    sender_label,
 )
-from src.utils import confirm_deletion, setup_logging
+from src.utils import (
+    LOGGER_NAME,
+    confirm_deletion,
+    confirm_search,
+    expected_search_count,
+    search_terms,
+    setup_logging,
+)
 
-logger = logging.getLogger("tmpu")
+logger = logging.getLogger(LOGGER_NAME)
 
 
 def _truncate_text(text: str | None, max_len: int = 80) -> str:
@@ -44,14 +52,27 @@ def _message_text(message) -> str:
     )
 
 
-def _log_message_preview(chat, message) -> None:
+def _log_message_preview(chat, message, me_id: int | None = None) -> None:
     logger.info(
-        "Preview chat=%s msg_id=%s date=%s text=%s",
+        "Preview chat=%s sender=%s msg_id=%s date=%s text=%s",
         _chat_label(chat),
+        sender_label(message, me_id),
         message.id,
         getattr(message, "date", None),
         _message_text(message),
     )
+
+
+def _confirm_search() -> bool:
+    if not sys.stdin.isatty():
+        logger.error("Cannot confirm search: stdin is not a TTY")
+        return False
+
+    try:
+        response = input("Proceed with search? [y/N]: ")
+    except (OSError, EOFError):
+        response = None
+    return confirm_search(response)
 
 
 def _confirm_force_deletion() -> bool:
@@ -66,19 +87,31 @@ def _confirm_force_deletion() -> bool:
     return confirm_deletion(response)
 
 
-def _group_message_ids_by_chat(messages) -> dict:
-    by_chat = defaultdict(list)
+def _chat_key(chat) -> object:
+    chat_id = getattr(chat, "id", None)
+    if chat_id is not None:
+        return chat_id
+    return id(chat)
+
+
+def _group_message_ids_by_chat(messages) -> list[tuple]:
+    grouped: dict[object, tuple] = {}
     for chat, message in messages:
-        by_chat[chat].append(message.id)
-    return by_chat
+        key = _chat_key(chat)
+        if key not in grouped:
+            grouped[key] = (chat, [])
+        grouped[key][1].append(message.id)
+    return list(grouped.values())
 
 
-async def _purge_messages(client, messages) -> None:
+async def _purge_messages(client, messages, wait_seconds: float) -> None:
     if not _confirm_force_deletion():
         return
 
-    for chat, message_ids in _group_message_ids_by_chat(messages).items():
-        await delete_messages_batch(client, chat, message_ids)
+    for chat, message_ids in _group_message_ids_by_chat(messages):
+        await delete_messages_batch(
+            client, chat, message_ids, wait_seconds=wait_seconds
+        )
 
 
 async def run_purge(argv: list[str] | None = None, env_path: Path | None = None) -> None:
@@ -87,6 +120,33 @@ async def run_purge(argv: list[str] | None = None, env_path: Path | None = None)
     config = load_config(env_path or Path(".env"))
     client = await create_client(config)
     try:
+        me = await client.get_me()
+        logger.info("Resolving candidate chats...")
+        chat_entities = await resolve_search_chats(
+            client,
+            args.chats,
+            include_channels=args.channels,
+            include_group_chats=args.group_chats,
+            after=args.after,
+        )
+        candidate_count = len(chat_entities)
+        if candidate_count == 0:
+            logger.info("No candidate chats to search")
+            return
+
+        term_count = len(search_terms(args.keywords or []))
+        search_count = expected_search_count(candidate_count, args.keywords)
+        logger.info(
+            "About to search %d chats (%d search terms, %d Telegram searches).",
+            candidate_count,
+            term_count,
+            search_count,
+        )
+
+        if not args.no_confirmation and not _confirm_search():
+            logger.info("Search aborted")
+            return
+
         messages = await fetch_target_messages(
             client,
             args.chats,
@@ -94,13 +154,25 @@ async def run_purge(argv: list[str] | None = None, env_path: Path | None = None)
             args.after,
             args.before,
             args.everyone,
+            args.from_user,
+            include_channels=args.channels,
+            include_group_chats=args.group_chats,
+            chat_entities=chat_entities,
+            wait_seconds=args.wait_seconds,
         )
 
         for chat, message in messages:
-            _log_message_preview(chat, message)
+            _log_message_preview(chat, message, me.id)
+
+        logger.info("Found %d matching message(s)", len(messages))
+        if not messages:
+            logger.info(
+                "No matches. Tips: use @username or exact chat title; "
+                "add --everyone or --from <user> if matches are from other users."
+            )
 
         if args.force:
-            await _purge_messages(client, messages)
+            await _purge_messages(client, messages, wait_seconds=args.wait_seconds)
     finally:
         await client.disconnect()
 
