@@ -52,17 +52,6 @@ def _message_text(message) -> str:
     )
 
 
-def _log_message_preview(chat, message, me_id: int | None = None) -> None:
-    logger.info(
-        "Preview chat=%s sender=%s msg_id=%s date=%s text=%s",
-        _chat_label(chat),
-        sender_label(message, me_id),
-        message.id,
-        getattr(message, "date", None),
-        _message_text(message),
-    )
-
-
 def _confirm_search() -> bool:
     if not sys.stdin.isatty():
         logger.error("Cannot confirm search: stdin is not a TTY")
@@ -160,10 +149,6 @@ async def run_purge(argv: list[str] | None = None, env_path: Path | None = None)
             chat_entities=chat_entities,
             wait_seconds=args.wait_seconds,
         )
-
-        for chat, message in messages:
-            _log_message_preview(chat, message, me.id)
-
         logger.info("Found %d matching message(s)", len(messages))
         if not messages:
             logger.info(
