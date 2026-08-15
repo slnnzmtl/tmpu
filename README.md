@@ -2,7 +2,7 @@
 
 A command-line tool that uses the Telegram **User API** (MTProto) to search for and delete your messages based on keywords, date ranges, and target chats.
 
-**Safety first:** dry-run is the default. Search asks for `y`/`yes` before querying Telegram. Actual deletion requires `--force` and typing `DELETE` at a separate confirmation prompt.
+**Safety first:** dry-run is the default. Search asks for `y`/`yes` before querying Telegram. Actual deletion requires `--force` and a separate `y`/`yes` confirmation.
 
 ## Requirements
 
@@ -66,7 +66,7 @@ A local session file (`tmpu.session`) is created so later runs do not require co
 python main.py --chats <chats> [options]
 ```
 
-By default only **private 1:1 chats** are searched. Channels and group chats are skipped unless you pass `--channels` and/or `--group-chats`.
+By default only **private 1:1 chats** are searched. Pass `--channels` and/or `--group-chats` to search those types **instead** (private chats are excluded when either flag is set).
 
 Between Telegram API calls the tool waits **1 second** by default (`--wait-seconds`). Pass `--wait-seconds 0` to disable proactive pauses.
 
@@ -75,7 +75,8 @@ Between Telegram API calls the tool waits **1 second** by default (`--wait-secon
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--chats` | Yes | Comma-separated `@username`, numeric ID, partial dialog title, or `all` |
-| `--keywords` | No | Comma-separated strings; partial/stem match (e.g. `hello` matches `Hello`) |
+| `--exclude-chats` | No | Comma-separated chat names (partial match) or `@username` (exact) to skip |
+| `--keywords` | No | Comma-separated strings; case-insensitive substring match (e.g. `hel` matches `hello`, `helicopter`) |
 | `--after` | No | Only messages on or after this date (`YYYY-MM-DD`); also skips chats whose last message is before that date |
 | `--before` | No | Messages on or before this date (`YYYY-MM-DD`, inclusive) |
 | `--everyone` | No | Include messages from all users (requires admin to delete others') |
@@ -83,8 +84,8 @@ Between Telegram API calls the tool waits **1 second** by default (`--wait-secon
 | `--channels` | No | Include broadcast channels in the search |
 | `--group-chats` | No | Include groups and megagroups in the search |
 | `--dry-run` | No | Preview matches without deleting (default) |
-| `--force` | No | Actually delete (requires typing `DELETE`) |
-| `--no-confirmation` | No | Skip the search `y`/`yes` prompt (does **not** skip the `--force` `DELETE` prompt) |
+| `--force` | No | Actually delete (requires a second `y`/`yes` confirmation) |
+| `--no-confirmation` | No | Skip both search and deletion `y`/`yes` prompts |
 | `--wait-seconds` | No | Seconds to pause between Telegram API calls (default `1`). Use `0` to disable proactive pauses |
 
 ### Examples
@@ -129,7 +130,13 @@ Include channels and group chats when searching:
 python main.py --chats all --keywords spam --channels --group-chats
 ```
 
-Delete matching messages (requires typing `DELETE`):
+Skip chats by partial name or exact `@username`:
+
+```bash
+python main.py --chats all --exclude-chats "Saved, @spamchannel"
+```
+
+Delete matching messages (requires confirming with `y`/`yes`):
 
 ```bash
 python main.py --chats @mychannel --keywords test --force
@@ -139,10 +146,10 @@ python main.py --chats @mychannel --keywords test --force
 
 - **Dry-run is default** — without `--force`, nothing is deleted.
 - **Search asks first** — before any Telegram search, you must confirm with `y` or `yes` (shows candidate chat count and expected search count).
-- **`--no-confirmation`** — skips only the search `y`/`yes` prompt; the `--force` `DELETE` prompt still applies.
-- **`--force` requires confirmation** — you must type `DELETE` exactly in an interactive terminal.
+- **`--no-confirmation`** — skips both the search and `--force` deletion `y`/`yes` prompts.
+- **`--force` requires confirmation** — unless `--no-confirmation` is set, you must answer `y` or `yes` at `Proceed with deletion? [y/N]:` in an interactive terminal.
 - **Deletion progress** — `--force` logs per-chat deletion progress and a final success summary.
-- **Non-interactive runs abort** — piping or CI without a TTY will not search (unless `--no-confirmation`) or delete.
+- **Non-interactive runs abort** — piping or CI without a TTY will not search or delete unless `--no-confirmation` is set.
 - **Deletes for everyone** — removed messages disappear for all participants where Telegram allows it.
 
 Always run a dry-run first and review the preview output.

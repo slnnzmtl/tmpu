@@ -47,6 +47,7 @@ def dry_run_args() -> CliArgs:
         group_chats=False,
         no_confirmation=False,
         wait_seconds=1.0,
+        exclude_chats=[],
     )
 
 
@@ -65,6 +66,7 @@ def force_args() -> CliArgs:
         group_chats=False,
         no_confirmation=False,
         wait_seconds=1.0,
+        exclude_chats=[],
     )
 
 
@@ -180,6 +182,7 @@ class TestRunPurgeDryRun:
             include_channels=dry_run_args.channels,
             include_group_chats=dry_run_args.group_chats,
             after=dry_run_args.after,
+            exclude_chats=dry_run_args.exclude_chats,
         )
         confirm_search_mock.assert_called_once()
         fetch_mock.assert_awaited_once_with(
@@ -251,6 +254,7 @@ class TestRunPurgeDryRun:
             include_channels=dry_run_args.channels,
             include_group_chats=dry_run_args.group_chats,
             after=after,
+            exclude_chats=dry_run_args.exclude_chats,
         )
 
 
@@ -593,6 +597,67 @@ class TestRunPurgeForce:
         assert any("Deleting 2 message(s) across 1 chat(s)..." in msg for msg in messages)
         assert any("Deleting 1/1: TeamChat (2 message(s))" in msg for msg in messages)
         assert any("Successfully deleted 2 message(s)" in msg for msg in messages)
+
+    @pytest.mark.asyncio
+    async def test_force_with_no_confirmation_skips_both_prompts(
+        self,
+        force_args: CliArgs,
+        sample_config: Config,
+        sample_messages: list[tuple],
+        mock_client: AsyncMock,
+        env_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        force_args.no_confirmation = True
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        chat = sample_messages[0][0]
+        resolved_chats = [chat]
+
+        with (
+            patch("main.parse_args", return_value=force_args),
+            patch("main.load_config", return_value=sample_config),
+            patch(
+                "main.create_client",
+                new_callable=AsyncMock,
+                return_value=mock_client,
+            ),
+            patch(
+                "main.resolve_search_chats",
+                new_callable=AsyncMock,
+                return_value=resolved_chats,
+                create=True,
+            ),
+            patch("main.confirm_search", return_value=True, create=True) as confirm_search_mock,
+            patch(
+                "main.fetch_target_messages",
+                new_callable=AsyncMock,
+                return_value=sample_messages,
+            ),
+            patch(
+                "main.delete_messages_batch",
+                new_callable=AsyncMock,
+            ) as delete_mock,
+            patch("main.confirm_deletion", return_value=False) as confirm_deletion_mock,
+            patch(
+                "builtins.input",
+                side_effect=AssertionError("input should not be called"),
+            ) as input_mock,
+        ):
+            await run_purge(
+                argv=["--chats", "chat1", "--force", "--no-confirmation"],
+                env_path=env_path,
+            )
+
+        confirm_search_mock.assert_not_called()
+        confirm_deletion_mock.assert_not_called()
+        input_mock.assert_not_called()
+        delete_mock.assert_awaited_once_with(
+            mock_client,
+            chat,
+            [101, 102],
+            wait_seconds=force_args.wait_seconds,
+        )
+        mock_client.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_force_with_zero_matches_skips_deletion_prompt(

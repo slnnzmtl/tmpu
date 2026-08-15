@@ -28,55 +28,12 @@ def chunk_list(lst: list, size: int = 100) -> list[list]:
     return [lst[i : i + size] for i in range(0, len(lst), size)]
 
 
-_MIN_STEM_LENGTH = 4
-_MAX_SUFFIX_TRIM = 3
-
-
-def keyword_stems(keyword: str) -> list[str]:
-    """Return stems from broadest to most specific for partial matching."""
-    normalized = keyword.lower().strip()
-    if not normalized:
-        return []
-
-    stems: set[str] = {normalized}
-    if len(normalized) > _MIN_STEM_LENGTH:
-        max_trim = min(_MAX_SUFFIX_TRIM, len(normalized) - _MIN_STEM_LENGTH)
-        for trim in range(1, max_trim + 1):
-            stems.add(normalized[:-trim])
-        for length in range(_MIN_STEM_LENGTH, len(normalized)):
-            stems.add(normalized[:length])
-    return sorted(stems, key=len)
-
-
-def broad_search_term(keyword: str) -> str:
-    """Single broad term for Telegram server search."""
-    normalized = keyword.lower().strip()
-    if len(normalized) <= 6:
-        return normalized
-    return normalized[:-2]
-
-
 def search_terms(keywords: list[str]) -> list[str]:
-    """Deduplicated broad search terms to query Telegram's search API."""
-    if not keywords:
-        return []
-
-    normalized = [keyword.lower().strip() for keyword in keywords if keyword.strip()]
-    if len(normalized) > 1:
-        shared_roots: list[str] = []
-        for anchor in normalized:
-            for length in range(len(anchor), _MIN_STEM_LENGTH - 1, -1):
-                root = anchor[:length]
-                if all(root in word for word in normalized):
-                    shared_roots.append(root)
-                    break
-        if shared_roots:
-            return [min(shared_roots, key=len)]
-
+    """Deduplicated keywords as typed for Telegram server search."""
     terms: list[str] = []
     seen: set[str] = set()
-    for keyword in normalized:
-        term = broad_search_term(keyword)
+    for keyword in keywords:
+        term = keyword.lower().strip()
         if term and term not in seen:
             seen.add(term)
             terms.append(term)
@@ -86,25 +43,18 @@ def search_terms(keywords: list[str]) -> list[str]:
 def message_matches_keywords(
     text: str | None, caption: str | None, keywords: list[str]
 ) -> bool:
+    """Case-insensitive substring match against message text and caption."""
     if not keywords:
         return True
     haystack = " ".join(part for part in (text, caption) if part).lower()
     if not haystack:
         return False
 
-    words = [word for word in haystack.split() if word]
-
-    for keyword in keywords:
-        for stem in keyword_stems(keyword):
-            if stem in haystack:
-                return True
-            if any(
-                word.startswith(stem) or stem.startswith(word)
-                for word in words
-                if len(word) >= _MIN_STEM_LENGTH or len(stem) <= len(word)
-            ):
-                return True
-    return False
+    return any(
+        keyword.lower().strip() in haystack
+        for keyword in keywords
+        if keyword.strip()
+    )
 
 
 def normalize_name_query(query: str) -> str:
@@ -119,8 +69,13 @@ def name_matches_query(query: str, names: list[str]) -> bool:
     return any(needle in name.lower() for name in names if name)
 
 
+def confirm_yes(stdin_input: str | None) -> bool:
+    """Accept y/yes (case-insensitive); anything else is declined."""
+    return bool(stdin_input) and stdin_input.strip().lower() in ("y", "yes")
+
+
 def confirm_deletion(stdin_input: str | None) -> bool:
-    return stdin_input == "DELETE"
+    return confirm_yes(stdin_input)
 
 
 def expected_search_count(chat_count: int, keywords: list[str] | None) -> int:
@@ -131,14 +86,14 @@ def expected_search_count(chat_count: int, keywords: list[str] | None) -> int:
 
 
 def confirm_search(stdin_input: str | None) -> bool:
-    return bool(stdin_input) and stdin_input.strip().lower() in ("y", "yes")
+    return confirm_yes(stdin_input)
 
 
 LOGGER_NAME = "tmpu"
 _LOG_FORMAT = "%(message)s"
 logger = logging.getLogger(LOGGER_NAME)
 
-DEFAULT_WAIT_SECONDS = 0.1
+DEFAULT_WAIT_SECONDS = 0.05
 
 
 async def pause_for_telegram(seconds: float) -> None:

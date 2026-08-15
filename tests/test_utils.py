@@ -64,20 +64,30 @@ class TestMessageMatchesKeywords:
     def test_matches_any_keyword_in_list(self):
         assert message_matches_keywords("nothing here", "but garbage", ["spam", "garbage"]) is True
 
-    def test_partial_stem_matches_inflected_word(self):
-        assert message_matches_keywords("meeting with alexandra", None, ["alexander"]) is True
+    def test_substring_keyword_matches_longer_words(self):
+        assert message_matches_keywords("go to hell", None, ["hel"]) is True
+        assert message_matches_keywords("say hello", None, ["hel"]) is True
+        assert message_matches_keywords("see the helicopter", None, ["hel"]) is True
 
-    def test_partial_stem_matches_different_case_ending(self):
-        assert message_matches_keywords("wrote alexandrum yesterday", None, ["alexander"]) is True
+    def test_substring_keyword_matches_mid_word(self):
+        assert message_matches_keywords("a shell game", None, ["hel"]) is True
+
+    def test_substring_does_not_match_unrelated_inflections(self):
+        assert message_matches_keywords("meeting with alexandra", None, ["alexander"]) is False
+        assert message_matches_keywords("wrote alexandrum yesterday", None, ["alexander"]) is False
 
     def test_single_short_keyword_still_matches_exactly(self):
         assert message_matches_keywords("say hi", None, ["hi"]) is True
 
-    def test_broad_search_term_trims_suffix(self):
-        from src.utils import broad_search_term, search_terms
+    def test_search_terms_are_typed_keywords_without_stem_trim(self):
+        from src.utils import search_terms
 
-        assert broad_search_term("alexander") == "alexand"
-        assert search_terms(["alexander", "alexandra", "alexandrum"]) == ["alexand"]
+        assert search_terms(["alexander", "alexandra", "alexandrum"]) == [
+            "alexander",
+            "alexandra",
+            "alexandrum",
+        ]
+        assert search_terms(["Hello", " HEL "]) == ["hello", "hel"]
 
 
 class TestNameMatching:
@@ -90,13 +100,18 @@ class TestNameMatching:
 
 
 class TestConfirmDeletion:
-    def test_returns_true_for_exact_delete(self):
-        assert confirm_deletion("DELETE") is True
+    def test_returns_true_for_yes_variants(self):
+        assert confirm_deletion("y") is True
+        assert confirm_deletion("yes") is True
+        assert confirm_deletion("Y") is True
+        assert confirm_deletion("YES") is True
+        assert confirm_deletion(" Yes ") is True
 
-    def test_returns_false_for_wrong_input(self):
+    def test_returns_false_for_non_yes_input(self):
+        assert confirm_deletion("n") is False
+        assert confirm_deletion("no") is False
+        assert confirm_deletion("DELETE") is False
         assert confirm_deletion("delete") is False
-        assert confirm_deletion("DELETE ") is False
-        assert confirm_deletion("YES") is False
 
     def test_returns_false_for_empty_input(self):
         assert confirm_deletion("") is False
@@ -116,8 +131,8 @@ class TestExpectedSearchCount:
         assert expected_search_count(3, None) == 3
         assert expected_search_count(3, []) == 3
 
-    def test_inflected_keywords_collapse_to_one_search_term_per_chat(self):
-        assert expected_search_count(3, ["alexander", "alexandra", "alexandrum"]) == 3
+    def test_counts_each_distinct_typed_keyword_per_chat(self):
+        assert expected_search_count(3, ["alexander", "alexandra", "alexandrum"]) == 9
 
 
 class TestConfirmSearch:

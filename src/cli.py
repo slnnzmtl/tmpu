@@ -19,6 +19,7 @@ class CliArgs:
     group_chats: bool
     no_confirmation: bool
     wait_seconds: float
+    exclude_chats: list[str]
 
 
 def _split_csv(value: str) -> list[str]:
@@ -36,6 +37,13 @@ def _parse_date(value: str) -> datetime:
 def _create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--chats", required=True, type=_split_csv)
+    parser.add_argument(
+        "--exclude-chats",
+        dest="exclude_chats",
+        type=_split_csv,
+        default=[],
+        help="Comma-separated chat names (partial) or @usernames (exact) to skip",
+    )
     parser.add_argument("--keywords", type=_split_csv)
     parser.add_argument("--after", type=_parse_date)
     parser.add_argument("--before", type=_parse_date)
@@ -72,6 +80,7 @@ def _cli_args_from_namespace(namespace: argparse.Namespace) -> CliArgs:
         group_chats=namespace.group_chats,
         no_confirmation=namespace.no_confirmation,
         wait_seconds=namespace.wait_seconds,
+        exclude_chats=namespace.exclude_chats,
     )
 
 

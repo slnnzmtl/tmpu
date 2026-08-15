@@ -71,7 +71,7 @@ def _confirm_force_deletion() -> bool:
         return False
 
     try:
-        response = input("Type DELETE to confirm: ")
+        response = input("Proceed with deletion? [y/N]: ")
     except (OSError, EOFError):
         response = None
     return confirm_deletion(response)
@@ -94,10 +94,12 @@ def _group_message_ids_by_chat(messages) -> list[tuple]:
     return list(grouped.values())
 
 
-async def _purge_messages(client, messages, wait_seconds: float) -> None:
+async def _purge_messages(
+    client, messages, wait_seconds: float, no_confirmation: bool = False
+) -> None:
     if not messages:
         return
-    if not _confirm_force_deletion():
+    if not no_confirmation and not _confirm_force_deletion():
         logger.info("Deletion aborted")
         return
 
@@ -147,6 +149,7 @@ async def run_purge(argv: list[str] | None = None, env_path: Path | None = None)
             include_channels=args.channels,
             include_group_chats=args.group_chats,
             after=args.after,
+            exclude_chats=args.exclude_chats,
         )
         candidate_count = len(chat_entities)
         if candidate_count == 0:
@@ -187,7 +190,12 @@ async def run_purge(argv: list[str] | None = None, env_path: Path | None = None)
             )
 
         if args.force:
-            await _purge_messages(client, messages, wait_seconds=args.wait_seconds)
+            await _purge_messages(
+                client,
+                messages,
+                wait_seconds=args.wait_seconds,
+                no_confirmation=args.no_confirmation,
+            )
     finally:
         await client.disconnect()
 

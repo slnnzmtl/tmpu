@@ -508,7 +508,9 @@ def _filter_entities_by_dialog_type(
     include_channels: bool,
     include_group_chats: bool,
 ) -> list:
+    exclude_private = include_channels or include_group_chats
     filtered = []
+    skipped_private = 0
     skipped_groups = 0
     skipped_channels = 0
     for entity in entities:
@@ -518,7 +520,7 @@ def _filter_entities_by_dialog_type(
         elif kind == "channel":
             included = include_channels
         else:
-            included = True
+            included = not exclude_private
 
         if included:
             filtered.append(entity)
@@ -526,29 +528,38 @@ def _filter_entities_by_dialog_type(
 
         if kind == "group":
             skipped_groups += 1
-        else:
+        elif kind == "channel":
             skipped_channels += 1
+        else:
+            skipped_private += 1
 
-    skipped_total = skipped_groups + skipped_channels
+    skipped_total = skipped_private + skipped_groups + skipped_channels
     if skipped_total:
-        skipped = (
-            (skipped_groups, "group", "groups", "--group-chats"),
-            (skipped_channels, "channel", "channels", "--channels"),
-        )
-        parts = [
-            f"{count} {singular if count == 1 else plural}"
-            for count, singular, plural, _ in skipped
+        parts = []
+        if skipped_private:
+            label = "private chat" if skipped_private == 1 else "private chats"
+            parts.append(f"{skipped_private} {label}")
+        if skipped_groups:
+            parts.append(
+                f"{skipped_groups} {'group' if skipped_groups == 1 else 'groups'}"
+            )
+        if skipped_channels:
+            parts.append(
+                f"{skipped_channels} {'channel' if skipped_channels == 1 else 'channels'}"
+            )
+        hints = [
+            flag
+            for flag, count in (
+                ("--group-chats", skipped_groups),
+                ("--channels", skipped_channels),
+            )
             if count
         ]
-        hint_parts = [flag for count, _, _, flag in skipped if count]
         chat_label = "chat" if skipped_total == 1 else "chats"
-        logger.info(
-            "Skipping %d %s (%s); pass %s to include",
-            skipped_total,
-            chat_label,
-            ", ".join(parts),
-            " / ".join(hint_parts),
-        )
+        msg = f"Skipping {skipped_total} {chat_label} ({', '.join(parts)})"
+        if hints:
+            msg += f"; pass {' / '.join(hints)} to include"
+        logger.info(msg)
     return filtered
 
 
@@ -598,12 +609,50 @@ def _filter_entities_by_last_message_after(entities, after, last_dates) -> list:
     return filtered
 
 
+def _filter_entities_by_exclude_chats(entities, patterns) -> list:
+    """Drop entities matching --exclude-chats: partial name or exact @username."""
+    if not patterns:
+        return entities
+    kept = []
+    skipped = 0
+    for entity in entities:
+        first = getattr(entity, "first_name", None) or ""
+        last = getattr(entity, "last_name", None) or ""
+        names = [
+            getattr(entity, "title", None),
+            first or None,
+            last or None,
+            f"{first} {last}".strip() or None,
+        ]
+        username = (getattr(entity, "username", None) or "").lower()
+        excluded = False
+        for raw in patterns:
+            p = raw.strip()
+            if not p or p == "@":
+                continue
+            if p.startswith("@"):
+                excluded = username == p[1:].lower()
+            else:
+                needle = p.lower()
+                excluded = any(needle in n.lower() for n in names if n)
+            if excluded:
+                break
+        if excluded:
+            skipped += 1
+        else:
+            kept.append(entity)
+    if skipped:
+        logger.info("Skipping %d chats matching --exclude-chats", skipped)
+    return kept
+
+
 async def resolve_search_chats(
     client,
     chats: list[str],
     include_channels: bool = False,
     include_group_chats: bool = False,
     after=None,
+    exclude_chats=(),
 ) -> list:
     dialogs = None
     if len(chats) == 1 and chats[0] == "all":
@@ -636,6 +685,8 @@ async def resolve_search_chats(
         entities = _filter_entities_by_last_message_after(
             entities, after, last_dates
         )
+
+    entities = _filter_entities_by_exclude_chats(entities, exclude_chats)
 
     return entities
 

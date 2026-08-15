@@ -35,7 +35,7 @@ tmpu/
 The utility must retrieve messages matching the following parameters:
 * **Target Chats:** Search within specific chats (by @username or ID) or across all accessible dialogs. 
     * *2026 Constraint:* `messages.SearchGlobal` is reserved for Premium users. If searching all chats, the script must loop through `client.iter_dialogs()` and execute `client.iter_messages()` on each chat individually.
-* **Keywords:** Exact string matching within the message text.
+* **Keywords:** Case-insensitive substring matching within the message text and caption (e.g. `hel` matches `hell`, `hello`, `helicopter`).
 * **Date Range:** Messages sent before (`max_date`) or after (`min_date`) a specific timestamp.
 * **Sender:** Default behavior targets ONLY messages sent by the authenticated user (`me`). An explicit override flag is required to target other users (requires admin rights).
 
@@ -47,7 +47,8 @@ The utility must retrieve messages matching the following parameters:
 Located in `src/cli.py` and executed via `main.py`.
 
 ```text
---chats       [Required] Comma-separated list of chat IDs/usernames, or "all".
+--chats          [Required] Comma-separated list of chat IDs/usernames, or "all".
+--exclude-chats  [Optional] Comma-separated chat names (partial) or @usernames (exact) to skip.
 --keywords    [Optional] Comma-separated strings to search for.
 --after       [Optional] Date in YYYY-MM-DD format.
 --before      [Optional] Date in YYYY-MM-DD format.

@@ -10,6 +10,7 @@ from telethon.tl.types import Channel, Chat, ChatPhotoEmpty, User
 from src.config import Config
 from src.telegram_client import (
     _chat_log_name,
+    _filter_entities_by_exclude_chats,
     create_client,
     delete_messages_batch,
     fetch_target_messages,
@@ -277,7 +278,7 @@ class TestFetchTargetMessagesSpecificChat:
     @pytest.mark.asyncio
     async def test_matches_any_keyword_not_only_the_first(self):
         chat_entity = MagicMock(id=100, title="mygroup")
-        messages = [
+        alexander_messages = [
             _make_message(
                 1,
                 datetime(2026, 1, 15, tzinfo=timezone.utc),
@@ -290,10 +291,12 @@ class TestFetchTargetMessagesSpecificChat:
                 "about alexander",
                 ME_ID,
             ),
+        ]
+        alexandra_messages = [
             _make_message(
                 3,
                 datetime(2026, 1, 13, tzinfo=timezone.utc),
-                "no matches here",
+                "meeting alexandra",
                 ME_ID,
             ),
         ]
@@ -301,7 +304,16 @@ class TestFetchTargetMessagesSpecificChat:
         client = MagicMock()
         client.get_me = AsyncMock(return_value=MagicMock(id=ME_ID))
         client.get_entity = AsyncMock(return_value=chat_entity)
-        client.iter_messages = MagicMock(return_value=_async_iter(messages))
+
+        def iter_for_search(*_args, **kwargs):
+            term = kwargs.get("search")
+            if term == "alexander":
+                return _async_iter(alexander_messages)
+            if term == "alexandra":
+                return _async_iter(alexandra_messages)
+            return _async_iter([])
+
+        client.iter_messages = MagicMock(side_effect=iter_for_search)
 
         result = await fetch_target_messages(
             client,
@@ -310,9 +322,10 @@ class TestFetchTargetMessagesSpecificChat:
             everyone=False,
         )
 
-        assert _message_ids(result) == [2, 1]
-        assert client.iter_messages.call_count == 1
-        assert client.iter_messages.call_args.kwargs["search"] == "alexand"
+        assert _message_ids(result) == [3, 2, 1]
+        assert client.iter_messages.call_count == 3
+        searched = [call.kwargs["search"] for call in client.iter_messages.call_args_list]
+        assert searched == ["alexander", "alexandra", "alexandrum"]
 
     @pytest.mark.asyncio
     async def test_logs_telegram_search_term(self, caplog):
@@ -339,11 +352,56 @@ class TestFetchTargetMessagesSpecificChat:
                 everyone=False,
             )
 
-        assert client.iter_messages.call_args.kwargs["search"] == "alexand"
+        assert client.iter_messages.call_args.kwargs["search"] == "alexander"
         assert any(
             "Searching" in record.message and "mygroup" in record.message
             for record in caplog.records
         )
+
+    @pytest.mark.asyncio
+    async def test_substring_keyword_keeps_prefix_and_mid_word_hits(self):
+        chat_entity = MagicMock(id=100, title="mygroup")
+        messages = [
+            _make_message(
+                1,
+                datetime(2026, 1, 15, tzinfo=timezone.utc),
+                "go to hell",
+                ME_ID,
+            ),
+            _make_message(
+                2,
+                datetime(2026, 1, 14, tzinfo=timezone.utc),
+                "say hello",
+                ME_ID,
+            ),
+            _make_message(
+                3,
+                datetime(2026, 1, 13, tzinfo=timezone.utc),
+                "see the helicopter",
+                ME_ID,
+            ),
+            _make_message(
+                4,
+                datetime(2026, 1, 12, tzinfo=timezone.utc),
+                "unrelated message",
+                ME_ID,
+            ),
+        ]
+
+        client = MagicMock()
+        client.get_me = AsyncMock(return_value=MagicMock(id=ME_ID))
+        client.get_entity = AsyncMock(return_value=chat_entity)
+        client.iter_messages = MagicMock(return_value=_async_iter(messages))
+
+        result = await fetch_target_messages(
+            client,
+            chats=["mygroup"],
+            keywords=["hel"],
+            everyone=False,
+        )
+
+        assert _message_ids(result) == [3, 2, 1]
+        assert client.iter_messages.call_args.kwargs["search"] == "hel"
 
     @pytest.mark.asyncio
     async def test_logs_each_match_as_found(self, caplog):
@@ -600,6 +658,59 @@ class TestResolveSearchChats:
 
         assert entities == [user]
         client.iter_dialogs.assert_called_once()
+
+
+class TestFilterEntitiesByExcludeChats:
+    def test_partial_name_matches_display_not_username(self):
+        named = _tl_user(1, "Alice")
+        titled = _tl_chat(2, "Team Alice")
+        combined = User(
+            id=3, access_hash=0, first_name="Alice", last_name="Smith"
+        )
+        username_only = User(id=4, access_hash=0, username="alice_smith")
+
+        kept = _filter_entities_by_exclude_chats(
+            [named, titled, combined, username_only],
+            ["alice"],
+        )
+
+        assert kept == [username_only]
+
+    def test_at_username_matches_exact_username_only(self):
+        exact = User(id=1, access_hash=0, username="alice")
+        similar = User(id=2, access_hash=0, username="alice_bot")
+        display = _tl_user(3, "Alice")
+
+        kept = _filter_entities_by_exclude_chats(
+            [exact, similar, display],
+            ["@Alice"],
+        )
+
+        assert kept == [similar, display]
+
+    def test_empty_and_at_only_patterns_are_ignored(self):
+        chat = _tl_user(1, "Alice")
+
+        kept = _filter_entities_by_exclude_chats([chat], ["", "@"])
+
+        assert kept == [chat]
+
+    def test_any_pattern_excludes_and_logs_skip_count(self, caplog):
+        team = _tl_chat(1, "Team Chat")
+        spam = User(id=2, access_hash=0, username="spamchannel")
+        kept_chat = _tl_user(3, "Bob")
+
+        with caplog.at_level(logging.INFO):
+            kept = _filter_entities_by_exclude_chats(
+                [team, spam, kept_chat],
+                ["team", "@spamchannel"],
+            )
+
+        assert kept == [kept_chat]
+        assert any(
+            "Skipping 2 chats matching --exclude-chats" in record.message
+            for record in caplog.records
+        )
 
 
 class TestFetchWithChatEntities:
@@ -1005,9 +1116,10 @@ class TestFetchTargetMessagesDialogTypeFilter:
             wait_seconds=0,
         )
 
-        assert _searched_entity_ids(client) == [user.id, channel.id]
+        assert _searched_entity_ids(client) == [channel.id]
         searched = [call.args[0] for call in client.iter_messages.call_args_list]
         assert group not in searched
+        assert user not in searched
 
     @pytest.mark.asyncio
     async def test_include_group_chats_adds_groups(self):
@@ -1028,9 +1140,10 @@ class TestFetchTargetMessagesDialogTypeFilter:
             wait_seconds=0,
         )
 
-        assert _searched_entity_ids(client) == [user.id, group.id]
+        assert _searched_entity_ids(client) == [group.id]
         searched = [call.args[0] for call in client.iter_messages.call_args_list]
         assert channel not in searched
+        assert user not in searched
 
     @pytest.mark.asyncio
     async def test_both_flags_include_all_types(self):
@@ -1051,7 +1164,7 @@ class TestFetchTargetMessagesDialogTypeFilter:
             wait_seconds=0,
         )
 
-        assert _searched_entity_ids(client) == [user.id, group.id, channel.id]
+        assert _searched_entity_ids(client) == [group.id, channel.id]
 
     @pytest.mark.asyncio
     async def test_include_group_chats_adds_megagroup_channels(self):
@@ -1076,7 +1189,7 @@ class TestFetchTargetMessagesDialogTypeFilter:
             wait_seconds=0,
         )
 
-        assert _searched_entity_ids(client) == [user.id, megagroup.id]
+        assert _searched_entity_ids(client) == [megagroup.id]
 
     @pytest.mark.asyncio
     async def test_named_channel_skipped_when_include_channels_false(self, caplog):
@@ -1127,6 +1240,31 @@ class TestFetchTargetMessagesDialogTypeFilter:
         assert "1 group" in log_text
         assert "--group-chats" in log_text
         assert "Skipping group" not in log_text
+
+    @pytest.mark.asyncio
+    async def test_channels_flag_excludes_private_chats(self, caplog):
+        dialog_user, dialog_group, dialog_channel, user, group, channel = (
+            self._three_typed_dialogs()
+        )
+        client = self._client_with_dialogs(
+            [dialog_user, dialog_group, dialog_channel]
+        )
+
+        with caplog.at_level(logging.INFO):
+            await fetch_target_messages(
+                client,
+                chats=["all"],
+                keywords=["spam"],
+                everyone=False,
+                include_channels=True,
+                include_group_chats=False,
+                wait_seconds=0,
+            )
+
+        assert _searched_entity_ids(client) == [channel.id]
+        log_text = " ".join(record.message for record in caplog.records)
+        assert "private chat" in log_text
+        assert "1 group" in log_text
 
 
 class TestFetchTargetMessagesDateFiltering:

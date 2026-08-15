@@ -19,7 +19,8 @@ def argv(monkeypatch):
 
 def test_minimal_args_default_to_dry_run(argv):
     """Given only --chats, defaults dry_run=True, force=False, everyone=False,
-    channels=False, group_chats=False, no_confirmation=False, wait_seconds=0.1."""
+    channels=False, group_chats=False, no_confirmation=False, wait_seconds=0.1,
+    exclude_chats=[]."""
     argv(["--chats", "foo"])
 
     args = parse_args()
@@ -33,6 +34,7 @@ def test_minimal_args_default_to_dry_run(argv):
     assert args.group_chats is False
     assert args.no_confirmation is False
     assert args.wait_seconds == 0.1
+    assert args.exclude_chats == []
 
 
 def test_wait_seconds_parses_as_float(argv):
@@ -100,6 +102,19 @@ def test_chats_and_keywords_parsed_as_lists(argv):
     argv(["--chats", "all"])
     args = parse_args()
     assert args.chats == ["all"]
+
+
+def test_exclude_chats_parsed_as_list(argv):
+    """Given comma-separated --exclude-chats, values are stripped and split."""
+    argv(["--chats", "all", "--exclude-chats", " foo , @Bar "])
+
+    args = parse_args()
+
+    assert args.exclude_chats == ["foo", "@Bar"]
+
+    argv(["--chats", "all"])
+    args = parse_args()
+    assert args.exclude_chats == []
 
 
 def test_everyone_flag(argv):
