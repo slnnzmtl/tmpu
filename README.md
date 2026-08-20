@@ -1,4 +1,4 @@
-# Telegram Message Purge Utility (TMPU)
+# Telegram Message Cleaner
 
 A command-line tool that uses the Telegram **User API** (MTProto) to search for and delete your messages based on keywords, date ranges, and target chats.
 
